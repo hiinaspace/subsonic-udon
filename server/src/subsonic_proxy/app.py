@@ -1,3 +1,4 @@
+import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,6 +33,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings is None:
             settings = Settings()
 
+        # Configure logging
+        logging.basicConfig(
+            level=getattr(logging, settings.log_level.upper()),
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+        # Suppress noisy HTTP client logs
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+        logger = logging.getLogger(__name__)
+        logger.info("Starting Subsonic VRChat Proxy")
+
         state = AppState()
         state.settings = settings
         state.subsonic = SubsonicClient(settings)
@@ -39,7 +54,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cache_dir=Path(settings.cache_dir),
             ttl_seconds=settings.cache_ttl_seconds,
         )
-        state.transcoder = HLSTranscoder(settings=settings, cache_manager=state.cache)
+        state.transcoder = HLSTranscoder(
+            settings=settings,
+            cache_manager=state.cache,
+            subsonic_client=state.subsonic,
+        )
         state.metadata_builder = MetadataBuilder(settings=settings, subsonic=state.subsonic)
         state.metadata = await state.metadata_builder.build()
         the_app.state.svc = state
@@ -63,16 +82,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.get("/{slot_id}.m3u8")
     async def get_hls_playlist(slot_id: str):
         state: AppState = application.state.svc
+        logger = logging.getLogger(__name__)
 
         if slot_id not in state.metadata.tracks:
+            logger.warning(f"Slot {slot_id} not found")
             raise HTTPException(404, f"Slot {slot_id} not found")
 
         track = state.metadata.tracks[slot_id]
         stream_url = state.subsonic.get_stream_url(track.id)
 
+        # Prepare track info dict
+        track_info = {
+            "title": track.title,
+            "artist": track.artist,
+            "album": track.album,
+            "coverArt": track.cover_art,
+        }
+
         try:
-            m3u8_path = await state.transcoder.ensure_transcoded(slot_id, stream_url)
+            logger.info(f"Serving HLS for slot {slot_id}: {track.title} - {track.artist}")
+            m3u8_path = await state.transcoder.ensure_transcoded(slot_id, stream_url, track_info)
         except TranscodeError as e:
+            logger.error(f"Transcoding failed for slot {slot_id}: {e}")
             raise HTTPException(502, f"Transcoding failed: {e}")
 
         content = m3u8_path.read_text()
@@ -95,7 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.post("/refresh")
     async def refresh():
         state: AppState = application.state.svc
-        state.metadata = await state.metadata_builder.build()
+        state.metadata = await state.metadata_builder.build(force_refresh=True)
         return {"status": "ok", "track_count": len(state.metadata.tracks)}
 
     return application

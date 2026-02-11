@@ -37,7 +37,9 @@ async def client(test_settings, mock_subsonic):
         cache_dir=Path(test_settings.cache_dir),
         ttl_seconds=test_settings.cache_ttl_seconds,
     )
-    state.transcoder = HLSTranscoder(settings=test_settings, cache_manager=state.cache)
+    state.transcoder = HLSTranscoder(
+        settings=test_settings, cache_manager=state.cache, subsonic_client=state.subsonic
+    )
     state.metadata_builder = MetadataBuilder(settings=test_settings, subsonic=state.subsonic)
     state.metadata = await state.metadata_builder.build()
     test_app.state.svc = state

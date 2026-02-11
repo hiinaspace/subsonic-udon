@@ -21,3 +21,23 @@ class Settings(BaseSettings):
     audio_bitrate: str = "192k"
 
     selection_strategy: str = "recent"
+
+    # Video generation settings
+    video_width: int = 640
+    video_height: int = 640
+    video_framerate: int = 1  # Low framerate with pre-rendered overlay
+    video_bitrate: str = "50k"
+    video_maxrate: str = "75k"
+    video_bufsize: str = "150k"
+
+    # Text overlay settings (Noto Sans CJK supports Japanese/Chinese/Korean)
+    text_font: str = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+
+    # Fallback cover art
+    fallback_bg_color: str = "#1a1a2e"
+
+    # Logging
+    log_level: str = "INFO"
+
+    # Concurrency limits
+    max_concurrent_transcodes: int = 3

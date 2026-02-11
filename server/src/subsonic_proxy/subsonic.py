@@ -91,3 +91,22 @@ class SubsonicClient:
     def get_stream_url(self, track_id: str) -> str:
         params = {**self._auth_params(), "id": track_id}
         return f"{self._base_url}/rest/stream.view?{urlencode(params)}"
+
+    async def get_cover_art(self, cover_art_id: str) -> bytes:
+        """Fetch album art from Subsonic getCoverArt API."""
+        all_params = self._auth_params()
+        resp = await self._http.get(
+            f"{self._base_url}/rest/getCoverArt.view",
+            params={**all_params, "id": cover_art_id},
+        )
+        resp.raise_for_status()
+
+        # getCoverArt returns raw image data, check for JSON error responses
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            data = resp.json()
+            sr = data["subsonic-response"]
+            if sr["status"] != "ok":
+                err = sr.get("error", {})
+                raise SubsonicError(err.get("code", 0), err.get("message", "Unknown error"))
+
+        return resp.content

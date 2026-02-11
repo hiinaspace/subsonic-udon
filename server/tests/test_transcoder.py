@@ -1,7 +1,8 @@
+import asyncio
 import os
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -20,8 +21,18 @@ def cache_manager(cache_dir):
 
 
 @pytest.fixture
-def transcoder(settings, cache_manager):
-    return HLSTranscoder(settings=settings, cache_manager=cache_manager)
+def mock_subsonic_client():
+    """Create a mock SubsonicClient for testing."""
+    mock = MagicMock()
+    mock.get_cover_art = AsyncMock(return_value=b"\xff\xd8\xff\xe0")  # JPEG header
+    return mock
+
+
+@pytest.fixture
+def transcoder(settings, cache_manager, mock_subsonic_client):
+    return HLSTranscoder(
+        settings=settings, cache_manager=cache_manager, subsonic_client=mock_subsonic_client
+    )
 
 
 def _create_fake_hls(slot_dir: Path):
@@ -51,12 +62,18 @@ class TestHLSTranscoder:
     @pytest.mark.anyio
     async def test_transcode_creates_files(self, transcoder, cache_dir):
         slot_dir = cache_dir / "segments" / "0001"
+        track_info = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "coverArt": None,
+        }
 
         async def fake_ffmpeg(*args, **kwargs):
             _create_fake_hls(slot_dir)
 
         with patch.object(transcoder, "_run_ffmpeg", new=AsyncMock(side_effect=fake_ffmpeg)):
-            m3u8_path = await transcoder.ensure_transcoded("0001", "song001")
+            m3u8_path = await transcoder.ensure_transcoded("0001", "song001", track_info)
 
         assert m3u8_path.exists()
         assert (slot_dir / "seg000.ts").exists()
@@ -65,12 +82,18 @@ class TestHLSTranscoder:
     @pytest.mark.anyio
     async def test_m3u8_is_valid_hls(self, transcoder, cache_dir):
         slot_dir = cache_dir / "segments" / "0001"
+        track_info = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "coverArt": None,
+        }
 
         async def fake_ffmpeg(*args, **kwargs):
             _create_fake_hls(slot_dir)
 
         with patch.object(transcoder, "_run_ffmpeg", new=AsyncMock(side_effect=fake_ffmpeg)):
-            m3u8_path = await transcoder.ensure_transcoded("0001", "song001")
+            m3u8_path = await transcoder.ensure_transcoded("0001", "song001", track_info)
 
         content = m3u8_path.read_text()
         assert "#EXTM3U" in content
@@ -80,16 +103,22 @@ class TestHLSTranscoder:
     @pytest.mark.anyio
     async def test_cached_transcode_skips_ffmpeg(self, transcoder, cache_dir):
         slot_dir = cache_dir / "segments" / "0001"
+        track_info = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "coverArt": None,
+        }
         _create_fake_hls(slot_dir)
 
         mock_ffmpeg = AsyncMock()
         with patch.object(transcoder, "_run_ffmpeg", new=mock_ffmpeg):
-            await transcoder.ensure_transcoded("0001", "song001")
+            await transcoder.ensure_transcoded("0001", "song001", track_info)
 
         mock_ffmpeg.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_expired_cache_retranscodes(self, cache_dir):
+    async def test_expired_cache_retranscodes(self, cache_dir, mock_subsonic_client):
         cache_manager = CacheManager(cache_dir=cache_dir, ttl_seconds=0)
         settings_with_zero_ttl = type(
             "S",
@@ -99,11 +128,30 @@ class TestHLSTranscoder:
                 "ffmpeg_path": "ffmpeg",
                 "hls_segment_duration": 10,
                 "audio_bitrate": "192k",
+                "video_width": 640,
+                "video_height": 640,
+                "video_framerate": 1,
+                "video_bitrate": "50k",
+                "video_maxrate": "75k",
+                "video_bufsize": "150k",
+                "text_font": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "fallback_bg_color": "#1a1a2e",
+                "max_concurrent_transcodes": 3,
             },
         )()
-        transcoder = HLSTranscoder(settings=settings_with_zero_ttl, cache_manager=cache_manager)
+        transcoder = HLSTranscoder(
+            settings=settings_with_zero_ttl,
+            cache_manager=cache_manager,
+            subsonic_client=mock_subsonic_client,
+        )
 
         slot_dir = cache_dir / "segments" / "0001"
+        track_info = {
+            "title": "Test Song",
+            "artist": "Test Artist",
+            "album": "Test Album",
+            "coverArt": None,
+        }
         _create_fake_hls(slot_dir)
         # Set mtime to the past to ensure expiration
         old_time = time.time() - 10
@@ -117,9 +165,10 @@ class TestHLSTranscoder:
             _create_fake_hls(slot_dir)
 
         with patch.object(transcoder, "_run_ffmpeg", new=AsyncMock(side_effect=fake_ffmpeg)):
-            await transcoder.ensure_transcoded("0001", "song001")
+            await transcoder.ensure_transcoded("0001", "song001", track_info)
 
         assert call_count == 1
+
 
 
 class TestCacheManager:
