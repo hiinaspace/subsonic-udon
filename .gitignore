@@ -73,6 +73,8 @@ Assets/XR/
 Assets/XR.meta
 Assets/Scenes/
 Assets/Scenes.meta
+Assets/Editor/SubsonicUdonAgentBridgeEval/
+Assets/Editor/SubsonicUdonAgentBridgeEval.meta
 
 # Python / server
 .env

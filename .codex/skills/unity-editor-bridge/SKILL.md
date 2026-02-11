@@ -13,6 +13,21 @@ Use this skill to drive the local Unity bridge at `http://127.0.0.1:32190` (over
 2. After file edits, call `scripts/unity-bridge-did-it-work.sh`.
 3. For incremental logs, call `scripts/unity-bridge-logs-since.sh <since_id>`.
 4. To create a UdonSharp script + `.asset`, call `scripts/unity-bridge-create-udonsharp.sh <path> [contents-file]`.
+5. To execute C# in editor context, use `scripts/unity-bridge-csharp-run.sh <code-file> [job-timeout-ms] [poll-seconds]`.
+
+## C# Eval Contract
+
+- C# code is inserted inside a `Func<object>` body in a generated editor script (`Assets/Editor/SubsonicUdonAgentBridgeEval/CurrentEvalJob.cs`).
+- You can write normal statements and optionally `return <value>;`.
+- If you do not return explicitly, the bridge returns `null`.
+- Compile errors are reported as `failed_compile` job state.
+- Runtime exceptions are reported as `failed` job state with exception text.
+
+## C# Eval Scripts
+
+- Submit only: `scripts/unity-bridge-csharp-submit.sh <code-file> [timeout-ms]`
+- Poll one job: `scripts/unity-bridge-csharp-job.sh <job-id>`
+- Submit + refresh + poll (recommended): `scripts/unity-bridge-csharp-run.sh <code-file> [job-timeout-ms] [poll-seconds]`
 
 ## Notes
 

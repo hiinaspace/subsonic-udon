@@ -5,6 +5,7 @@ VRChat music player world backed by a Subsonic-compatible music server.
 ## Agent Workflow
 
 - When editing UdonSharp scripts in this repo, use the local `unity-editor-bridge` skill (`.codex/skills/unity-editor-bridge/`) to run `did-it-work`/`logs-since` checks and capture actual Unity compile errors after asset refresh.
+- When you need scene/asset inspection or targeted editor-side changes, prefer the skill's C# eval flow (`unity-bridge-csharp-run.sh`) instead of editing Unity YAML assets directly.
 
 ## Architecture
 

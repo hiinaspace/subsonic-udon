@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -22,6 +23,7 @@ namespace SubsonicUdon.EditorBridge
         private static readonly object LogLock = new object();
         private static readonly Queue<Action> MainThreadQueue = new Queue<Action>();
         private static readonly object StateLock = new object();
+        private static readonly object EvalLock = new object();
 
         private static HttpListener listener;
         private static CancellationTokenSource listenerCts;
@@ -30,11 +32,19 @@ namespace SubsonicUdon.EditorBridge
         private static long nextLogId = 1;
         private static readonly List<BridgeLogEvent> logEvents = new List<BridgeLogEvent>(4096);
         private static CompileState cachedCompileState;
+        private static readonly Dictionary<string, CSharpEvalJob> evalJobs = new Dictionary<string, CSharpEvalJob>();
+        private static bool evalJobsLoaded;
+
+        private const string EvalJobsFile = "Library/SubsonicUdonAgentBridge/eval-jobs.json";
+        private const string EvalScriptDir = "Assets/Editor/SubsonicUdonAgentBridgeEval";
+        private const string EvalScriptPath = EvalScriptDir + "/CurrentEvalJob.cs";
+        private const string EvalScriptFileName = "CurrentEvalJob.cs";
 
         static SubsonicUdonAgentBridge()
         {
             Application.logMessageReceivedThreaded += OnLogMessageReceived;
             EditorApplication.update += PumpMainThreadQueue;
+            EnsureEvalJobsLoaded();
 
             if (EditorPrefs.GetBool(AutoStartPref, true))
             {
@@ -258,6 +268,22 @@ namespace SubsonicUdon.EditorBridge
                     return;
                 }
 
+                if (string.Equals(path, "/csharp/submit", StringComparison.OrdinalIgnoreCase))
+                {
+                    string body = await ReadBodyAsync(ctx.Request);
+                    CSharpSubmitRequest request = ParseJsonOrDefault<CSharpSubmitRequest>(body);
+                    await HandleCSharpSubmitAsync(ctx.Response, request);
+                    return;
+                }
+
+                if (string.Equals(path, "/csharp/job", StringComparison.OrdinalIgnoreCase))
+                {
+                    string body = await ReadBodyAsync(ctx.Request);
+                    CSharpJobRequest request = ParseJsonOrDefault<CSharpJobRequest>(body);
+                    await HandleCSharpJobAsync(ctx.Response, request);
+                    return;
+                }
+
                 await WriteJsonAsync(ctx.Response, 404, new ErrorResponse { ok = false, error = $"Unknown endpoint: {path}" });
             }
             catch (Exception ex)
@@ -342,6 +368,30 @@ namespace SubsonicUdon.EditorBridge
             await WriteJsonAsync(response, status, result);
         }
 
+        private static async Task HandleCSharpSubmitAsync(HttpListenerResponse response, CSharpSubmitRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.code))
+            {
+                await WriteJsonAsync(response, 400, new ErrorResponse { ok = false, error = "Missing required field: code" });
+                return;
+            }
+
+            CSharpSubmitResult result = await ExecuteOnMainThreadAsync(() => SubmitCSharpJob(request));
+            await WriteJsonAsync(response, result.ok ? 200 : 400, result);
+        }
+
+        private static async Task HandleCSharpJobAsync(HttpListenerResponse response, CSharpJobRequest request)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.jobId))
+            {
+                await WriteJsonAsync(response, 400, new ErrorResponse { ok = false, error = "Missing required field: jobId" });
+                return;
+            }
+
+            CSharpJobResult result = await ExecuteOnMainThreadAsync(() => GetCSharpJob(request.jobId));
+            await WriteJsonAsync(response, result.ok ? 200 : 404, result);
+        }
+
         private static CreateUdonSharpScriptResult CreateUdonSharpScript(CreateUdonSharpScriptRequest request)
         {
             try
@@ -424,6 +474,361 @@ namespace SubsonicUdon.EditorBridge
             {
                 return new CreateUdonSharpScriptResult { ok = false, error = ex.ToString() };
             }
+        }
+
+        private static CSharpSubmitResult SubmitCSharpJob(CSharpSubmitRequest request)
+        {
+            EnsureEvalJobsLoaded();
+
+            lock (EvalLock)
+            {
+                CSharpEvalJob active = evalJobs.Values.FirstOrDefault(j => j.status == "queued" || j.status == "running");
+                if (active != null)
+                {
+                    return new CSharpSubmitResult
+                    {
+                        ok = false,
+                        error = $"A job is already active ({active.jobId}, status={active.status}). Poll /csharp/job first.",
+                    };
+                }
+
+                string jobId = $"job_{DateTime.UtcNow.Ticks}";
+                int timeoutMs = request.timeoutMs > 0 ? request.timeoutMs : 30000;
+                long beforeLogId = GetLastLogId();
+                string scriptContents = BuildEvalRunnerScript(jobId, request.code, request.usings);
+
+                try
+                {
+                    Directory.CreateDirectory(ToAbsolutePath(EvalScriptDir));
+                    File.WriteAllText(ToAbsolutePath(EvalScriptPath), scriptContents, new UTF8Encoding(false));
+                    AssetDatabase.ImportAsset(EvalScriptPath, ImportAssetOptions.ForceSynchronousImport);
+                }
+                catch (Exception ex)
+                {
+                    return new CSharpSubmitResult
+                    {
+                        ok = false,
+                        error = $"Failed to write eval runner script: {ex.Message}",
+                    };
+                }
+
+                CSharpEvalJob job = new CSharpEvalJob
+                {
+                    jobId = jobId,
+                    status = "queued",
+                    code = request.code,
+                    scriptPath = EvalScriptPath,
+                    timeoutMs = timeoutMs,
+                    beforeLogId = beforeLogId,
+                    submittedUtc = DateTime.UtcNow.ToString("o"),
+                    updatedUtc = DateTime.UtcNow.ToString("o"),
+                };
+
+                evalJobs[jobId] = job;
+                SaveEvalJobs();
+
+                return new CSharpSubmitResult
+                {
+                    ok = true,
+                    jobId = job.jobId,
+                    status = job.status,
+                    scriptPath = job.scriptPath,
+                    beforeLogId = job.beforeLogId,
+                    timeoutMs = job.timeoutMs,
+                };
+            }
+        }
+
+        private static CSharpJobResult GetCSharpJob(string jobId)
+        {
+            EnsureEvalJobsLoaded();
+
+            lock (EvalLock)
+            {
+                if (!evalJobs.TryGetValue(jobId, out CSharpEvalJob job))
+                {
+                    return new CSharpJobResult { ok = false, error = $"Job not found: {jobId}" };
+                }
+
+                MaybeResolveQueuedJobFromLogs(job);
+                MaybeTimeoutJob(job);
+                SaveEvalJobs();
+
+                return new CSharpJobResult
+                {
+                    ok = true,
+                    job = job.Clone(),
+                };
+            }
+        }
+
+        internal static bool TryStartEvalJob(string jobId)
+        {
+            EnsureEvalJobsLoaded();
+
+            lock (EvalLock)
+            {
+                if (!evalJobs.TryGetValue(jobId, out CSharpEvalJob job))
+                {
+                    return false;
+                }
+
+                if (job.status != "queued")
+                {
+                    return false;
+                }
+
+                job.status = "running";
+                job.startedUtc = DateTime.UtcNow.ToString("o");
+                job.updatedUtc = DateTime.UtcNow.ToString("o");
+                SaveEvalJobs();
+                return true;
+            }
+        }
+
+        internal static long GetLastLogIdForEval()
+        {
+            return GetLastLogId();
+        }
+
+        internal static void CompleteEvalJobSuccess(string jobId, object result, long beforeLogId, long afterLogId)
+        {
+            EnsureEvalJobsLoaded();
+
+            lock (EvalLock)
+            {
+                if (!evalJobs.TryGetValue(jobId, out CSharpEvalJob job))
+                {
+                    return;
+                }
+
+                job.status = "succeeded";
+                job.result = result != null ? result.ToString() : string.Empty;
+                job.resultType = result != null ? result.GetType().FullName : "null";
+                job.beforeLogId = beforeLogId;
+                job.afterLogId = afterLogId;
+                job.finishedUtc = DateTime.UtcNow.ToString("o");
+                job.updatedUtc = DateTime.UtcNow.ToString("o");
+                SaveEvalJobs();
+            }
+        }
+
+        internal static void CompleteEvalJobFailure(string jobId, string error, long beforeLogId, long afterLogId)
+        {
+            EnsureEvalJobsLoaded();
+
+            lock (EvalLock)
+            {
+                if (!evalJobs.TryGetValue(jobId, out CSharpEvalJob job))
+                {
+                    return;
+                }
+
+                job.status = "failed";
+                job.error = error ?? "Unknown error";
+                job.beforeLogId = beforeLogId;
+                job.afterLogId = afterLogId;
+                job.finishedUtc = DateTime.UtcNow.ToString("o");
+                job.updatedUtc = DateTime.UtcNow.ToString("o");
+                SaveEvalJobs();
+            }
+        }
+
+        private static void MaybeResolveQueuedJobFromLogs(CSharpEvalJob job)
+        {
+            if (job.status != "queued")
+            {
+                return;
+            }
+
+            CompileState state = BuildCompileState();
+            if (state.isCompiling || state.isUpdating)
+            {
+                return;
+            }
+
+            CoalescedLog[] logs = GetCoalescedLogsSince(job.beforeLogId, 500);
+            List<string> compileErrors = new List<string>();
+            for (int i = 0; i < logs.Length; i++)
+            {
+                CoalescedLog log = logs[i];
+                if (!string.Equals(log.type, "Error", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string msg = log.fullMessage ?? log.message ?? string.Empty;
+                if (msg.IndexOf(EvalScriptFileName, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    compileErrors.Add(msg);
+                }
+            }
+
+            if (compileErrors.Count > 0)
+            {
+                job.status = "failed_compile";
+                job.error = string.Join("\n", compileErrors.ToArray());
+                job.afterLogId = GetLastLogId();
+                job.finishedUtc = DateTime.UtcNow.ToString("o");
+                job.updatedUtc = DateTime.UtcNow.ToString("o");
+            }
+        }
+
+        private static void MaybeTimeoutJob(CSharpEvalJob job)
+        {
+            if (job.status != "queued" && job.status != "running")
+            {
+                return;
+            }
+
+            if (!DateTime.TryParse(job.submittedUtc, out DateTime submitted))
+            {
+                return;
+            }
+
+            double elapsedMs = (DateTime.UtcNow - submitted.ToUniversalTime()).TotalMilliseconds;
+            if (elapsedMs < job.timeoutMs)
+            {
+                return;
+            }
+
+            job.status = "timeout";
+            job.error = $"Job timed out after {job.timeoutMs}ms.";
+            job.afterLogId = GetLastLogId();
+            job.finishedUtc = DateTime.UtcNow.ToString("o");
+            job.updatedUtc = DateTime.UtcNow.ToString("o");
+        }
+
+        private static string BuildEvalRunnerScript(string jobId, string userCode, string[] extraUsings)
+        {
+            StringBuilder usingBuilder = new StringBuilder();
+            usingBuilder.AppendLine("using System;");
+            usingBuilder.AppendLine("using UnityEditor;");
+            usingBuilder.AppendLine("using UnityEngine;");
+            usingBuilder.AppendLine("using SubsonicUdon.EditorBridge;");
+
+            if (extraUsings != null)
+            {
+                for (int i = 0; i < extraUsings.Length; i++)
+                {
+                    string ns = (extraUsings[i] ?? string.Empty).Trim();
+                    if (string.IsNullOrEmpty(ns))
+                    {
+                        continue;
+                    }
+
+                    usingBuilder.Append("using ");
+                    usingBuilder.Append(ns);
+                    usingBuilder.AppendLine(";");
+                }
+            }
+
+            string safeCode = userCode ?? string.Empty;
+            if (!safeCode.EndsWith("\n", StringComparison.Ordinal))
+            {
+                safeCode += "\n";
+            }
+
+            return
+usingBuilder.ToString() +
+"\n" +
+"namespace SubsonicUdon.EditorBridge\n" +
+"{\n" +
+"    [InitializeOnLoad]\n" +
+"    internal static class CurrentEvalJobRunner\n" +
+"    {\n" +
+"        static CurrentEvalJobRunner()\n" +
+"        {\n" +
+"            EditorApplication.delayCall += Run;\n" +
+"        }\n" +
+"\n" +
+"        private static void Run()\n" +
+"        {\n" +
+$"            const string jobId = \"{jobId}\";\n" +
+"            if (!SubsonicUdonAgentBridge.TryStartEvalJob(jobId))\n" +
+"            {\n" +
+"                return;\n" +
+"            }\n" +
+"\n" +
+"            long before = SubsonicUdonAgentBridge.GetLastLogIdForEval();\n" +
+"            try\n" +
+"            {\n" +
+"                object result = ((Func<object>)(() =>\n" +
+"                {\n" +
+safeCode +
+"                    return null;\n" +
+"                }))();\n" +
+"\n" +
+"                long after = SubsonicUdonAgentBridge.GetLastLogIdForEval();\n" +
+"                SubsonicUdonAgentBridge.CompleteEvalJobSuccess(jobId, result, before, after);\n" +
+"            }\n" +
+"            catch (Exception ex)\n" +
+"            {\n" +
+"                long after = SubsonicUdonAgentBridge.GetLastLogIdForEval();\n" +
+"                SubsonicUdonAgentBridge.CompleteEvalJobFailure(jobId, ex.ToString(), before, after);\n" +
+"            }\n" +
+"        }\n" +
+"    }\n" +
+"}\n";
+        }
+
+        private static void EnsureEvalJobsLoaded()
+        {
+            lock (EvalLock)
+            {
+                if (evalJobsLoaded)
+                {
+                    return;
+                }
+
+                evalJobs.Clear();
+                string path = ToAbsolutePath(EvalJobsFile);
+                if (File.Exists(path))
+                {
+                    try
+                    {
+                        string json = File.ReadAllText(path);
+                        CSharpEvalJobStore store = JsonUtility.FromJson<CSharpEvalJobStore>(json);
+                        if (store != null && store.jobs != null)
+                        {
+                            for (int i = 0; i < store.jobs.Length; i++)
+                            {
+                                CSharpEvalJob job = store.jobs[i];
+                                if (job == null || string.IsNullOrEmpty(job.jobId))
+                                {
+                                    continue;
+                                }
+
+                                evalJobs[job.jobId] = job;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[SubsonicUdonAgentBridge] Failed to load eval jobs: {ex.Message}");
+                    }
+                }
+
+                evalJobsLoaded = true;
+            }
+        }
+
+        private static void SaveEvalJobs()
+        {
+            CSharpEvalJobStore store = new CSharpEvalJobStore
+            {
+                jobs = evalJobs.Values.ToArray(),
+            };
+
+            string json = JsonUtility.ToJson(store, true);
+            string path = ToAbsolutePath(EvalJobsFile);
+            string dir = Path.GetDirectoryName(path);
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            File.WriteAllText(path, json, new UTF8Encoding(false));
         }
 
         private static CompileState BuildCompileState()
@@ -814,6 +1219,20 @@ $"public class {className} : UdonSharpBehaviour\n" +
         }
 
         [Serializable]
+        private class CSharpSubmitRequest
+        {
+            public string code;
+            public int timeoutMs;
+            public string[] usings;
+        }
+
+        [Serializable]
+        private class CSharpJobRequest
+        {
+            public string jobId;
+        }
+
+        [Serializable]
         private class HealthResponse
         {
             public bool ok;
@@ -860,6 +1279,72 @@ $"public class {className} : UdonSharpBehaviour\n" +
         {
             public bool ok;
             public string error;
+        }
+
+        [Serializable]
+        private class CSharpSubmitResult
+        {
+            public bool ok;
+            public string error;
+            public string jobId;
+            public string status;
+            public string scriptPath;
+            public long beforeLogId;
+            public int timeoutMs;
+        }
+
+        [Serializable]
+        private class CSharpJobResult
+        {
+            public bool ok;
+            public string error;
+            public CSharpEvalJob job;
+        }
+
+        [Serializable]
+        private class CSharpEvalJobStore
+        {
+            public CSharpEvalJob[] jobs;
+        }
+
+        [Serializable]
+        private class CSharpEvalJob
+        {
+            public string jobId;
+            public string status;
+            public string code;
+            public string scriptPath;
+            public int timeoutMs;
+            public long beforeLogId;
+            public long afterLogId;
+            public string result;
+            public string resultType;
+            public string error;
+            public string submittedUtc;
+            public string startedUtc;
+            public string finishedUtc;
+            public string updatedUtc;
+
+            public CSharpEvalJob Clone()
+            {
+                return new CSharpEvalJob
+                {
+                    jobId = jobId,
+                    status = status,
+                    code = code,
+                    scriptPath = scriptPath,
+                    timeoutMs = timeoutMs,
+                    beforeLogId = beforeLogId,
+                    afterLogId = afterLogId,
+                    result = result,
+                    resultType = resultType,
+                    error = error,
+                    submittedUtc = submittedUtc,
+                    startedUtc = startedUtc,
+                    finishedUtc = finishedUtc,
+                    updatedUtc = updatedUtc,
+                };
+            }
         }
 
         [Serializable]
