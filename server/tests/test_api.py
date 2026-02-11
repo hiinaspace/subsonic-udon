@@ -123,6 +123,18 @@ class TestSegmentEndpoint:
         assert resp.status_code == 404
 
 
+class TestAudioEndpoint:
+    @pytest.mark.anyio
+    async def test_invalid_slot_404(self, client):
+        resp = await client.get("/9999.mp3")
+        assert resp.status_code == 404
+
+    @pytest.mark.anyio
+    async def test_nonexistent_slot_format_404(self, client):
+        resp = await client.get("/notaslot.mp3")
+        assert resp.status_code == 404
+
+
 class TestRefreshEndpoint:
     @pytest.mark.anyio
     async def test_refresh_returns_ok(self, client):

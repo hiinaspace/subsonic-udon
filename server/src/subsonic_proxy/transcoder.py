@@ -62,7 +62,7 @@ class HLSTranscoder:
             if available:
                 logger.warning(f"Available fonts on this system: {', '.join(available)}")
                 logger.warning(
-                    f"Set SUBSONIC_PROXY_TEXT_FONT environment variable to use a different font"
+                    "Set SUBSONIC_PROXY_TEXT_FONT environment variable to use a different font"
                 )
 
     def _slot_dir(self, slot_id: str) -> Path:
@@ -180,9 +180,7 @@ class HLSTranscoder:
 
             # Resize to target dimensions if needed
             if img.size != (self._video_width, self._video_height):
-                img = img.resize(
-                    (self._video_width, self._video_height), Image.Resampling.LANCZOS
-                )
+                img = img.resize((self._video_width, self._video_height), Image.Resampling.LANCZOS)
 
             # Convert to RGB if needed (handle RGBA, grayscale, etc.)
             if img.mode != "RGB":

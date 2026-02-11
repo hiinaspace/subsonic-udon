@@ -42,3 +42,10 @@ class CacheManager:
             for cover_file in covers_dir.iterdir():
                 if cover_file.is_file() and self.is_expired(cover_file):
                     cover_file.unlink()
+
+        # Clean up expired audio files
+        audio_dir = self.cache_dir / "audio"
+        if audio_dir.exists():
+            for audio_file in audio_dir.iterdir():
+                if audio_file.is_file() and self.is_expired(audio_file):
+                    audio_file.unlink()

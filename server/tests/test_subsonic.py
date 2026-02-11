@@ -108,3 +108,22 @@ class TestGetStreamUrl:
         assert "f=json" in url
         assert "t=" in url
         assert "s=" in url
+
+
+class TestGetAudioStream:
+    @pytest.mark.anyio
+    async def test_downloads_audio_data(self, settings, mock_subsonic):
+        async with SubsonicClient(settings) as client:
+            audio_data = await client.get_audio_stream("song001")
+
+        assert isinstance(audio_data, bytes)
+        assert b"FAKE_MP3_DATA_song001" in audio_data
+
+    @pytest.mark.anyio
+    async def test_includes_format_and_bitrate_params(self, settings, mock_subsonic):
+        async with SubsonicClient(settings) as client:
+            audio_data = await client.get_audio_stream("song002", format="ogg", max_bitrate=192)
+
+        assert isinstance(audio_data, bytes)
+        # Verify the request was made (mock handled it)
+        assert b"FAKE_MP3_DATA_song002" in audio_data

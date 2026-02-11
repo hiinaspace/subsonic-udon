@@ -285,4 +285,13 @@ def mock_subsonic():
 
         rsm.get("/rest/getAlbum.view").mock(side_effect=album_handler)
 
+        # Mock audio stream endpoint (returns fake MP3 data)
+        def stream_handler(request):
+            track_id = request.url.params.get("id", "")
+            # Return fake MP3 data (just some bytes)
+            fake_mp3_data = b"FAKE_MP3_DATA_" + track_id.encode()
+            return Response(200, content=fake_mp3_data, headers={"content-type": "audio/mpeg"})
+
+        rsm.get("/rest/stream.view").mock(side_effect=stream_handler)
+
         yield rsm

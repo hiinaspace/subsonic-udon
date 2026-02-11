@@ -41,3 +41,7 @@ class Settings(BaseSettings):
 
     # Concurrency limits
     max_concurrent_transcodes: int = 3
+
+    # Audio streaming settings
+    audio_format: str = "mp3"  # Format for direct streaming
+    audio_max_bitrate: int = 320  # Maximum bitrate in kbps

@@ -123,6 +123,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Segment not found")
         return FileResponse(segment_path, media_type="video/mp2t")
 
+    @application.get("/{slot_id}.mp3")
+    async def get_audio(slot_id: str):
+        """Proxy audio file directly from Subsonic (no transcoding)."""
+        state: AppState = application.state.svc
+        logger = logging.getLogger(__name__)
+
+        # Validate slot exists
+        if slot_id not in state.metadata.tracks:
+            logger.warning(f"Slot {slot_id} not found")
+            raise HTTPException(404, f"Slot {slot_id} not found")
+
+        track = state.metadata.tracks[slot_id]
+
+        # Check cache first
+        cache_path = Path(state.settings.cache_dir) / "audio" / f"{slot_id}.mp3"
+        if cache_path.exists() and not state.cache.is_expired(cache_path):
+            logger.info(f"Serving cached audio for slot {slot_id}: {track.title}")
+            return FileResponse(
+                cache_path,
+                media_type="audio/mpeg",
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Disposition": f'inline; filename="{slot_id}.mp3"',
+                },
+            )
+
+        # Download from Subsonic and cache
+        logger.info(f"Downloading audio for slot {slot_id}: {track.title} - {track.artist}")
+        audio_format = getattr(state.settings, "audio_format", "mp3")
+        max_bitrate = getattr(state.settings, "audio_max_bitrate", 320)
+        audio_data = await state.subsonic.get_audio_stream(
+            track.id, format=audio_format, max_bitrate=max_bitrate
+        )
+
+        # Save to cache
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(audio_data)
+
+        logger.info(f"Cached audio for slot {slot_id} ({len(audio_data) / 1024 / 1024:.2f} MB)")
+
+        return FileResponse(
+            cache_path,
+            media_type="audio/mpeg",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'inline; filename="{slot_id}.mp3"',
+            },
+        )
+
     @application.post("/refresh")
     async def refresh():
         state: AppState = application.state.svc

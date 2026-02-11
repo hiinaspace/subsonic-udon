@@ -1,4 +1,3 @@
-import asyncio
 import os
 import time
 from pathlib import Path
@@ -168,7 +167,6 @@ class TestHLSTranscoder:
             await transcoder.ensure_transcoded("0001", "song001", track_info)
 
         assert call_count == 1
-
 
 
 class TestCacheManager:

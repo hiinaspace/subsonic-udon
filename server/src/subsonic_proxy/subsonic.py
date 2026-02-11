@@ -110,3 +110,40 @@ class SubsonicClient:
                 raise SubsonicError(err.get("code", 0), err.get("message", "Unknown error"))
 
         return resp.content
+
+    async def get_audio_stream(
+        self, track_id: str, format: str = "mp3", max_bitrate: int = 320
+    ) -> bytes:
+        """Download audio stream from Subsonic.
+
+        Args:
+            track_id: Subsonic track ID
+            format: Audio format (mp3, ogg, etc.)
+            max_bitrate: Maximum bitrate in kbps
+
+        Returns:
+            Audio file bytes
+        """
+        params = {
+            **self._auth_params(),
+            "id": track_id,
+            "format": format,
+            "maxBitRate": max_bitrate,
+        }
+
+        resp = await self._http.get(
+            f"{self._base_url}/rest/stream.view",
+            params=params,
+            timeout=httpx.Timeout(300.0, connect=30.0),  # Long timeout for large files
+        )
+        resp.raise_for_status()
+
+        # Check if response is JSON error (instead of audio data)
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            data = resp.json()
+            sr = data["subsonic-response"]
+            if sr["status"] != "ok":
+                err = sr.get("error", {})
+                raise SubsonicError(err.get("code", 0), err.get("message", "Unknown error"))
+
+        return resp.content
