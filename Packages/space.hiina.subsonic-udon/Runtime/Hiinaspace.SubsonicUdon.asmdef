@@ -4,6 +4,7 @@
     "references": [
         "UdonSharp.Runtime",
         "VRC.Udon",
+        "Unity.TextMeshPro",
         "JLChnToZ.VVMW",
         "JLChnToZ.VRC.Foundation",
         "VRC.Udon.Serialization.OdinSerializer"

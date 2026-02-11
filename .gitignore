@@ -75,6 +75,10 @@ Assets/Scenes/
 Assets/Scenes.meta
 Assets/Editor/SubsonicUdonAgentBridgeEval/
 Assets/Editor/SubsonicUdonAgentBridgeEval.meta
+Assets/AVProVideo
+Assets/AVProVideo.meta
+Assets/TextMesh Pro
+Assets/TextMesh Pro.meta
 
 # Python / server
 .env
