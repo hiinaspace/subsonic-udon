@@ -9,6 +9,7 @@
 /[Bb]uilds/
 /[Ll]ogs/
 /[Mm]emoryCaptures/
+/[Uu]serSettings/
 
 # Asset meta data should only be ignored when the corresponding asset is also ignored
 !/[Aa]ssets/**/*.meta
@@ -62,3 +63,14 @@ crashlytics-build.properties
 Assets/PackageMakerWindowData.asset*
 .idea
 .vscode
+
+# Python / server
+.env
+server/.venv/
+server/cache/
+server/test_cache/
+server/.pytest_cache/
+__pycache__/
+*.pyc
+.ruff_cache/
+*.egg-info/
