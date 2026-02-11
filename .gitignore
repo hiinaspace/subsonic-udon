@@ -71,6 +71,8 @@ Assets/UdonSharp/
 Assets/UdonSharp.meta
 Assets/XR/
 Assets/XR.meta
+Assets/Scenes/
+Assets/Scenes.meta
 
 # Python / server
 .env
