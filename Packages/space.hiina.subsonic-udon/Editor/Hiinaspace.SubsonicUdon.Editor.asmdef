@@ -1,0 +1,22 @@
+{
+    "name": "Hiinaspace.SubsonicUdon.Editor",
+    "rootNamespace": "Hiinaspace.SubsonicUdon.Editor",
+    "references": [
+        "UdonSharp.Runtime",
+        "UdonSharp.Editor",
+        "VRC.Udon",
+        "Hiinaspace.SubsonicUdon",
+        "JLChnToZ.VVMW"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

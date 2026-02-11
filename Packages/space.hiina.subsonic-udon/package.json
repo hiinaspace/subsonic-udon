@@ -1,0 +1,12 @@
+{
+  "name": "space.hiina.subsonic-udon",
+  "displayName": "Subsonic Udon",
+  "version": "0.1.0",
+  "unity": "2022.3",
+  "description": "Browse and play music from a Subsonic server in VRChat via VizVid.",
+  "vrchatVersion": "2022.1.1",
+  "vpmDependencies": {
+    "com.vrchat.worlds": "3.x.x >=3.9.0",
+    "idv.jlchntoz.vvmw": "1.x.x >=1.5.3"
+  }
+}

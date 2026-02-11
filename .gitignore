@@ -64,6 +64,14 @@ Assets/PackageMakerWindowData.asset*
 .idea
 .vscode
 
+# UdonSharp auto-generated
+Assets/SerializedUdonPrograms/
+Assets/SerializedUdonPrograms.meta
+Assets/UdonSharp/
+Assets/UdonSharp.meta
+Assets/XR/
+Assets/XR.meta
+
 # Python / server
 .env
 server/.venv/
