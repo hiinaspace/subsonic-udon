@@ -9,7 +9,7 @@ recovery_wait_seconds="${4:-20}"
 
 payload="{\"settleMs\":${settle_ms},\"timeoutMs\":${timeout_ms},\"maxGroups\":${max_groups}}"
 
-before_health="$("$script_dir/unity-bridge-health.sh" 2>/dev/null || true)"
+before_health="$(UNITY_BRIDGE_RETRY_ATTEMPTS=1 "$script_dir/unity-bridge-health.sh" 2>/dev/null || true)"
 before_id="$(python3 -c 'import json,sys
 raw=sys.argv[1]
 if not raw.strip():
@@ -25,7 +25,7 @@ else:
 tmp_err="$(mktemp)"
 trap 'rm -f "$tmp_err"' EXIT
 
-if did_it_work_json="$("$script_dir/unity-bridge-curl.sh" did-it-work "$payload" 2>"$tmp_err")"; then
+if did_it_work_json="$(UNITY_BRIDGE_RETRY_ATTEMPTS=1 "$script_dir/unity-bridge-curl.sh" did-it-work "$payload" 2>"$tmp_err")"; then
   printf '%s\n' "$did_it_work_json"
   exit 0
 fi
@@ -33,7 +33,7 @@ fi
 echo "[unity-bridge-did-it-work] request dropped, waiting for bridge reload..." >&2
 
 for _ in $(seq 1 "$recovery_wait_seconds"); do
-  if "$script_dir/unity-bridge-health.sh" >/dev/null 2>&1; then
+  if UNITY_BRIDGE_RETRY_ATTEMPTS=1 "$script_dir/unity-bridge-health.sh" >/dev/null 2>&1; then
     logs_json="$("$script_dir/unity-bridge-logs-since.sh" "$before_id" "$max_groups")"
     python3 -c 'import json,sys
 before_id=int(sys.argv[1])
