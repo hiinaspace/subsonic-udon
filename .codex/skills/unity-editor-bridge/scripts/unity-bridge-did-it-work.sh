@@ -10,16 +10,16 @@ recovery_wait_seconds="${4:-20}"
 payload="{\"settleMs\":${settle_ms},\"timeoutMs\":${timeout_ms},\"maxGroups\":${max_groups}}"
 
 before_health="$(UNITY_BRIDGE_RETRY_ATTEMPTS=1 "$script_dir/unity-bridge-health.sh" 2>/dev/null || true)"
-before_id="$(python3 -c 'import json,sys
+before_timestamp="$(python3 -c 'import json,sys
 raw=sys.argv[1]
 if not raw.strip():
-    print(0)
+    print("")
 else:
     try:
         obj=json.loads(raw)
-        print(int(obj.get("lastLogId",0)))
+        print(str(obj.get("lastLogTimestampUtc","")))
     except Exception:
-        print(0)
+        print("")
 ' "$before_health")"
 
 tmp_err="$(mktemp)"
@@ -34,21 +34,21 @@ echo "[unity-bridge-did-it-work] request dropped, waiting for bridge reload..." 
 
 for _ in $(seq 1 "$recovery_wait_seconds"); do
   if UNITY_BRIDGE_RETRY_ATTEMPTS=1 "$script_dir/unity-bridge-health.sh" >/dev/null 2>&1; then
-    logs_json="$("$script_dir/unity-bridge-logs-since.sh" "$before_id" "$max_groups")"
+    logs_json="$("$script_dir/unity-bridge-logs-since.sh" "$before_timestamp" "$max_groups")"
     python3 -c 'import json,sys
-before_id=int(sys.argv[1])
+before_ts=sys.argv[1]
 logs=json.loads(sys.argv[2])
 out={
   "ok": True,
   "fallback": True,
-  "note": "did-it-work disconnected during refresh; returned logs/since after bridge recovery",
-  "beforeId": before_id,
-  "afterId": int(logs.get("lastLogId", before_id)),
+  "note": "did-it-work disconnected during refresh; returned logs/since(timestamp) after bridge recovery",
+  "beforeTimestampUtc": before_ts,
+  "afterTimestampUtc": str(logs.get("lastLogTimestampUtc", "")),
   "newLogGroups": logs.get("logGroups", []),
   "compileState": logs.get("compileState", {}),
 }
 print(json.dumps(out))
-' "$before_id" "$logs_json"
+' "$before_timestamp" "$logs_json"
     exit 0
   fi
   sleep 1

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using UdonSharp;
@@ -303,6 +304,7 @@ namespace SubsonicUdon.EditorBridge
                 isPlaying = state.isPlaying,
                 logCount = GetLogCount(),
                 lastLogId = GetLastLogId(),
+                lastLogTimestampUtc = GetLastLogTimestampUtc(),
             };
 
             await WriteJsonAsync(response, 200, payload);
@@ -339,15 +341,16 @@ namespace SubsonicUdon.EditorBridge
 
         private static async Task HandleLogsSinceAsync(HttpListenerResponse response, LogsSinceRequest request)
         {
-            long sinceId = request != null ? request.sinceId : 0;
+            string sinceTimestampUtc = request != null ? request.sinceTimestampUtc : string.Empty;
             int maxGroups = request != null && request.maxGroups > 0 ? request.maxGroups : 200;
-            CoalescedLog[] logs = GetCoalescedLogsSince(sinceId, maxGroups);
+            CoalescedLog[] logs = GetCoalescedLogsSinceTimestamp(sinceTimestampUtc, maxGroups);
 
             LogsSinceResponse payload = new LogsSinceResponse
             {
                 ok = true,
-                sinceId = sinceId,
+                sinceTimestampUtc = sinceTimestampUtc,
                 lastLogId = GetLastLogId(),
+                lastLogTimestampUtc = GetLastLogTimestampUtc(),
                 logGroups = logs,
                 compileState = BuildCompileState(),
             };
@@ -981,6 +984,80 @@ $"public class {className} : UdonSharpBehaviour\n" +
             }
         }
 
+        private static string GetLastLogTimestampUtc()
+        {
+            lock (LogLock)
+            {
+                if (logEvents.Count == 0)
+                {
+                    return string.Empty;
+                }
+
+                return logEvents[logEvents.Count - 1].timestampUtc;
+            }
+        }
+
+        private static CoalescedLog[] GetCoalescedLogsSinceTimestamp(string sinceTimestampUtc, int maxGroups)
+        {
+            DateTime sinceUtc = ParseTimestampUtcOrMin(sinceTimestampUtc);
+            List<BridgeLogEvent> snapshot = new List<BridgeLogEvent>();
+            lock (LogLock)
+            {
+                for (int i = 0; i < logEvents.Count; i++)
+                {
+                    DateTime eventUtc = ParseTimestampUtcOrMin(logEvents[i].timestampUtc);
+                    if (eventUtc > sinceUtc)
+                    {
+                        snapshot.Add(logEvents[i]);
+                    }
+                }
+            }
+
+            List<CoalescedLog> groups = new List<CoalescedLog>();
+            Dictionary<string, int> keyToIndex = new Dictionary<string, int>();
+
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                BridgeLogEvent e = snapshot[i];
+                string firstLine = FirstLine(e.message);
+                string key = e.type + "\n" + e.message + "\n" + e.stackTrace;
+
+                int idx;
+                if (keyToIndex.TryGetValue(key, out idx))
+                {
+                    CoalescedLog existing = groups[idx];
+                    existing.count += 1;
+                    existing.lastId = e.id;
+                    existing.lastTimestampUtc = e.timestampUtc;
+                    groups[idx] = existing;
+                    continue;
+                }
+
+                CoalescedLog created = new CoalescedLog
+                {
+                    type = e.type,
+                    message = firstLine,
+                    fullMessage = e.message,
+                    stackTrace = e.stackTrace,
+                    count = 1,
+                    firstId = e.id,
+                    lastId = e.id,
+                    firstTimestampUtc = e.timestampUtc,
+                    lastTimestampUtc = e.timestampUtc,
+                };
+
+                keyToIndex[key] = groups.Count;
+                groups.Add(created);
+
+                if (groups.Count >= maxGroups)
+                {
+                    break;
+                }
+            }
+
+            return groups.ToArray();
+        }
+
         private static CoalescedLog[] GetCoalescedLogsSince(long sinceExclusive, int maxGroups)
         {
             List<BridgeLogEvent> snapshot = new List<BridgeLogEvent>();
@@ -1038,6 +1115,22 @@ $"public class {className} : UdonSharpBehaviour\n" +
             }
 
             return groups.ToArray();
+        }
+
+        private static DateTime ParseTimestampUtcOrMin(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return DateTime.MinValue;
+            }
+
+            DateTime parsed;
+            if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out parsed))
+            {
+                return parsed.ToUniversalTime();
+            }
+
+            return DateTime.MinValue;
         }
 
         private static string FirstLine(string message)
@@ -1206,7 +1299,7 @@ $"public class {className} : UdonSharpBehaviour\n" +
         [Serializable]
         private class LogsSinceRequest
         {
-            public long sinceId;
+            public string sinceTimestampUtc;
             public int maxGroups;
         }
 
@@ -1241,6 +1334,7 @@ $"public class {className} : UdonSharpBehaviour\n" +
             public bool isPlaying;
             public int logCount;
             public long lastLogId;
+            public string lastLogTimestampUtc;
         }
 
         [Serializable]
@@ -1257,8 +1351,9 @@ $"public class {className} : UdonSharpBehaviour\n" +
         private class LogsSinceResponse
         {
             public bool ok;
-            public long sinceId;
+            public string sinceTimestampUtc;
             public long lastLogId;
+            public string lastLogTimestampUtc;
             public CoalescedLog[] logGroups;
             public CompileState compileState;
         }
